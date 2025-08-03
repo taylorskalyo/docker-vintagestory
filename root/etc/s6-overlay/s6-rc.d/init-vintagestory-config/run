@@ -1,0 +1,79 @@
+#!/usr/bin/with-contenv bash
+# shellcheck shell=bash
+
+# make folders
+mkdir -p \
+    /config
+
+# mods
+MOD_DIR="/config/Mods"
+if [ -n "$MOD_URLS" ]; then
+  mkdir -p "${MOD_DIR}"
+  (
+    set -e
+    cd "${MOD_DIR}"
+
+    # remove mods not explicitly set in $MOD_URLS
+    for f in *; do
+      if ! grep -q "/$f " <<< "${MOD_URLS} "; then
+        echo "Removing mod ${f}"
+        rm -- "$f"
+      fi
+    done
+
+    # download mods
+    for url in $MOD_URLS; do
+      echo "Adding mod ${url}"
+      curl -LO --skip-existing "${url}"
+    done
+  )
+fi
+
+# whitelist
+PLAYER_DIR="/config/Playerdata"
+if [ -n "$PLAYERS_WHITELIST" ]; then
+  mkdir -p "${PLAYER_DIR}"
+  whitelist=""
+  for name in $PLAYERS_WHITELIST; do
+    echo "Adding ${name} to whilelist"
+    uid=$(
+      curl -sL -X POST https://auth3.vintagestory.at/resolveplayername \
+        -d "playername=$name" \
+        | jq -r '.playeruid'
+    )
+    whitelist+=$(cat <<-JSON
+{
+  "PlayerUID": "${uid}",
+  "PlayerName": "${name}",
+  "UntilDate": "$(date --date="1 year" -u +"%Y-%m-%dT%H:%M:%S.%7N%:z")",
+  "Reason": "whitelist env",
+  "IssuedByPlayerName": "Console"
+},
+JSON
+)
+  done
+
+  # strip trailing ","
+  if [[ -n $whitelist ]]; then
+    whitelist="${whitelist:0:-1}"
+  fi
+
+  jq -c <<-JSON > "${PLAYER_DIR}/playerswhitelisted.json"
+[${whitelist}]
+JSON
+
+fi
+
+# config
+if [ -n "$STARTUP_COMMANDS" ]; then
+  s6-setuidgid abc /server/VintagestoryServer --dataPath /config --setconfig "{\"StartupCommands\": \"${STARTUP_COMMANDS}\"}"
+fi
+if [ -n "$SERVER_PASSWORD" ]; then
+  s6-setuidgid abc /server/VintagestoryServer --dataPath /config --setconfig "{\"Password\": \"${SERVER_PASSWORD}\"}"
+fi
+
+# permissions
+lsiown -R abc:abc \
+    /config
+
+# vim: ft=sh
